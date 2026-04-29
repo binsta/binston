@@ -68,8 +68,9 @@ export function getAllPosts(): Post[] {
 }
 
 export function getPost(slug: string): Post | null {
-  const filePath = path.join(contentDir, "writing", `${slug}.mdx`);
-  if (!fs.existsSync(filePath)) return null;
+  const base = path.join(contentDir, "writing", slug);
+  const filePath = [`${base}.mdx`, `${base}.md`].find(fs.existsSync);
+  if (!filePath) return null;
   const raw = fs.readFileSync(filePath, "utf-8");
   const { data, content } = matter(raw);
   const frontmatter = WritingFrontmatterSchema.parse(data);
@@ -118,8 +119,9 @@ export function getAudit(slug: string): Audit | null {
 }
 
 export function getProject(slug: string): Project | null {
-  const filePath = path.join(contentDir, "projects", `${slug}.mdx`);
-  if (!fs.existsSync(filePath)) return null;
+  const base = path.join(contentDir, "projects", slug);
+  const filePath = [`${base}.mdx`, `${base}.md`].find(fs.existsSync);
+  if (!filePath) return null;
   const raw = fs.readFileSync(filePath, "utf-8");
   const { data, content } = matter(raw);
   const frontmatter = ProjectFrontmatterSchema.parse(data);
