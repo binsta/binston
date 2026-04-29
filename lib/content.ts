@@ -106,8 +106,9 @@ export function getAllAudits(): Audit[] {
 }
 
 export function getAudit(slug: string): Audit | null {
-  const filePath = path.join(contentDir, "audits", `${slug}.mdx`);
-  if (!fs.existsSync(filePath)) return null;
+  const tryPaths = [`${base}.mdx`, `${base}.md`];
+  const filePath = tryPaths.find(fs.existsSync);
+  if (!filePath) return null;
   const raw = fs.readFileSync(filePath, "utf-8");
   const { data, content } = matter(raw);
   const frontmatter = AuditFrontmatterSchema.parse(data);
