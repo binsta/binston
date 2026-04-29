@@ -1,0 +1,119 @@
+---
+title: ARGUS
+tagline: Concolic execution engine for EVM bytecode analysis
+date: 2024-01-01
+tags: [Rust, EVM, Formal Methods, Symbolic Execution]
+summary: >
+  ARGUS is a concolic execution engine for EVM bytecode that combines concrete
+  execution traces with symbolic reasoning to systematically explore contract
+  state space and find reachability bugs.
+status: active
+---
+
+## Overview
+
+ARGUS is a concolic execution engine for EVM bytecode. It runs concrete
+transactions, records the path conditions that made those executions possible,
+and then asks a solver for nearby inputs that drive execution into unexplored
+branches.
+
+The project is built for security review work where source code is incomplete,
+compiler settings are unknown, or the interesting behavior only appears after a
+specific sequence of state transitions. Instead of treating the EVM as a source
+language problem, ARGUS works directly at bytecode level and keeps storage,
+memory, calldata, logs, and call frames in the execution model.
+
+## Execution Model
+
+ARGUS executes one path concretely while carrying symbolic expressions beside
+values that came from calldata, caller-controlled storage, timestamps, balances,
+and return data. At each conditional jump, it records the branch predicate and
+the concrete decision that was taken.
+
+```text
+calldata[4:36] = amount
+require(amount <= balance[msg.sender])
+branch: amount <= balance[msg.sender]  => true
+```
+
+The next exploration step negates one predicate, keeps the earlier prefix
+fixed, and solves for a transaction that reaches the sibling branch.
+
+<Callout type="warn">
+  The engine treats solver answers as candidates, not proofs. Every generated
+  input is replayed concretely against the bytecode before it is accepted as a
+  new path.
+</Callout>
+
+## Architecture
+
+ARGUS is split into four small subsystems:
+
+- an EVM interpreter that preserves opcode-level traces;
+- a symbolic value layer for stack, memory, calldata, and storage reads;
+- a path scheduler that prioritizes unexplored branches and short call
+  sequences;
+- a solver adapter boundary so constraints can be inspected before dispatch.
+
+<Benchmark caption="The main ARGUS subsystems">
+
+| Subsystem | Responsibility | Failure mode it protects against |
+| --- | --- | --- |
+| Interpreter | faithful bytecode execution | source/compiler mismatch |
+| Symbolic values | branch and data dependencies | missed attacker-controlled input |
+| Scheduler | path and sequence selection | shallow one-call coverage |
+| Replay | concrete validation | solver artifacts and false positives |
+
+</Benchmark>
+
+## State Exploration
+
+Many contract bugs are sequence bugs: the vulnerable call is only reachable
+after initialization, deposits, accounting drift, oracle updates, or callback
+state. ARGUS treats a transaction sequence as part of the search state.
+
+```text
+seed:
+  1. deposit(10 ether)
+  2. borrow(7 ether)
+  3. repay(1 wei)
+
+candidate:
+  1. deposit(10 ether)
+  2. borrow(7 ether)
+  3. repay(0)
+  4. withdraw(10 ether)
+```
+
+The scheduler favors short sequences first, then expands paths that introduce
+new storage dependencies or external-call edges. That keeps the search useful
+for audit workflows where a human wants a compact trace, not just a coverage
+number.
+
+## Finding Classes
+
+ARGUS is designed to make reachability evidence easier to produce for issues
+such as:
+
+- authorization checks that depend on mutable storage slots;
+- accounting paths that diverge after rounding or fee logic;
+- unchecked external-call return paths;
+- panic or revert branches reachable with valid user input;
+- state-machine transitions that skip required intermediate states.
+
+For each candidate, the engine stores the concrete calldata sequence, touched
+storage slots, branch predicates, emitted logs, and the final call trace. That
+artifact is meant to be pasted into a report or minimized into a Foundry test.
+
+## Current Status
+
+ARGUS is active implementation work. The priority is correctness and audit
+ergonomics over breadth: a small opcode core with clear trace output is more
+valuable than a large analysis engine whose results are hard to reproduce.
+
+Near-term work:
+
+- model more precompiles and edge-case gas behavior;
+- improve storage-shape recovery for mappings and packed structs;
+- add minimization for generated transaction sequences;
+- export replay fixtures as Foundry tests.

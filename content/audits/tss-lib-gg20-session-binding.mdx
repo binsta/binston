@@ -1,0 +1,176 @@
+---
+title: "Incomplete GG20 Session Binding in tss-lib v2"
+date: "2026-04-25"
+protocol: "BNB tss-lib"
+platform: "bnb"
+severity: "high"
+status: "confirmed"
+summary: "Deterministic SSIDs and a sessionless RangeProofAlice allowed MtA proof transcripts to be replayed across GG20 signing sessions with the same party set."
+tags: ["gg20", "threshold-ecdsa", "session-binding", "replay"]
+draft: true
+---
+
+<Callout type="danger">
+  The vulnerable behavior is cross-session proof replay. A
+  `RangeProofAlice` transcript produced in one signing session can be accepted
+  in another session because the proof is not bound to a fresh session
+  identifier.
+</Callout>
+
+## Summary
+
+[`tss-lib v2`](https://github.com/bnb-chain/tss-lib/) introduced GG20-style session binding during its migration from
+GG18. The migration was incomplete in two places:
+
+- `ssidNonce` was hardcoded to zero, so the same parties derived the same SSID
+  across signing sessions.
+- `ProveRangeAlice` and `RangeProofAlice.Verify` were not updated to include
+  `Session []byte` in the Fiat-Shamir challenge.
+
+As a result, the library appeared to have session-bound proof infrastructure,
+but one MtA proof remained reusable across sessions.
+
+## Affected code
+
+The deterministic nonce appears in the first round of three protocol families:
+
+```go
+round.temp.ssidNonce = new(big.Int).SetUint64(0)
+```
+
+Affected areas:
+
+- `ecdsa/signing/round_1.go`
+- `eddsa/signing/round_1.go`
+- `ecdsa/resharing/round_1_old_step_1.go`
+
+The sessionless challenge is in `crypto/mta/range_proof.go`:
+
+```go
+eHash := common.SHA512_256i(append(pk.AsInts(), c, z, u, w)...)
+```
+
+Other MtA proofs use the session-bound tagged hash:
+
+```go
+eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), ...)...)
+```
+
+That makes `RangeProofAlice` the inconsistent proof in the MtA path.
+
+## Root cause
+
+The codebase had most of the intended GG20 hardening:
+
+- an `ssidNonce` field;
+- `getSSID()` helpers;
+- session-aware MtA functions;
+- tagged Fiat-Shamir hashing through `SHA512_256i_TAGGED`.
+
+The missing pieces were small but security-critical. The nonce was never made
+fresh, and Alice's range proof was not threaded through the same session
+parameter used by the rest of the MtA exchange.
+
+## Attack path
+
+The replay flow is:
+
+1. Alice creates `(cA, pi)` in Session A.
+2. Bob verifies `pi` against `cA`.
+3. The same `(cA, pi)` tuple is replayed in Session B.
+4. Bob accepts it because `RangeProofAlice.Verify` has no `Session` argument.
+
+The verifier checks that the proof is valid for the public statement. It does
+not check that the proof belongs to the current signing session.
+
+## Impact
+
+This does not directly recover the threshold private key. Signing still uses
+fresh per-session randomness, and Bob's MtA share material remains random.
+
+The security failure is that GG20's session isolation guarantee is broken.
+Fiat-Shamir transcripts are supposed to be domain-separated by session so that
+they cannot be moved between protocol executions. Here, Alice's range proof can
+be moved between executions involving the same parties.
+
+For a threshold signing library, that is a protocol-level correctness bug in a
+core signing path.
+
+## Proof of concept
+
+The PoC shows the two properties that should not hold.
+
+First, two sessions with the same party set produce the same SSID:
+
+```go
+ssidSession1 := signingSSID(keys[0], 1)
+ssidSession2 := signingSSID(keys[0], 1)
+
+assert.True(t, bytes.Equal(ssidSession1, ssidSession2))
+```
+
+Second, a range proof from Session A verifies when replayed into Session B:
+
+```go
+cA, proofFromSessionA, _ := mta.AliceInit(
+    ec,
+    aliceKey.PaillierPKs[0],
+    kSessionA,
+    bobKey.NTildej[1],
+    bobKey.H1j[1],
+    bobKey.H2j[1],
+    rand.Reader,
+)
+
+accepted := proofFromSessionA.Verify(
+    ec,
+    aliceKey.PaillierPKs[0],
+    bobKey.NTildej[1],
+    bobKey.H1j[1],
+    bobKey.H2j[1],
+    cA,
+)
+
+assert.True(t, accepted)
+```
+
+The expected secure behavior is that Session B verification should fail unless
+the proof was generated for Session B.
+
+## Recommended fix
+
+Generate a fresh 256-bit `ssidNonce` for each protocol run:
+
+```go
+nonce, err := rand.Int(round.Rand(), new(big.Int).Lsh(big.NewInt(1), 256))
+if err != nil {
+    return round.WrapError(err)
+}
+round.temp.ssidNonce = nonce
+```
+
+Then add `Session []byte` to `ProveRangeAlice` and
+`RangeProofAlice.Verify`, and compute the challenge with the tagged session
+hash:
+
+```go
+eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), c, z, u, w)...)
+```
+
+Finally, pass `Session` through `BobMid` and `BobMidWC` when verifying Alice's
+range proof.
+
+## Regression tests
+
+The fix should include tests that prove:
+
+- repeated sessions with the same parties derive different SSIDs;
+- `RangeProofAlice` generated under Session A fails under Session B;
+- `BobMid` and `BobMidWC` pass `Session` into Alice's range-proof verifier;
+- normal single-session signing still succeeds.
+
+## Lesson
+
+Session binding is only effective when every proof in the protocol uses the
+same session domain. One unbound Fiat-Shamir challenge is enough to reopen the
+cross-session replay class that GG20's session model is designed to close.

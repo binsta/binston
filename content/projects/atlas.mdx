@@ -1,0 +1,134 @@
+---
+title: ATLAS
+tagline: Algebraic constraint system for ZK circuit verification
+date: 2024-01-01
+tags: [Rust, ZK, Groth16, PLONK]
+summary: >
+  ATLAS is a Rust-based toolchain for building, composing, and verifying
+  zero-knowledge proof circuits. It provides a typed constraint system that
+  catches under-constrained and over-constrained bugs at compile time.
+status: active
+---
+
+## Overview
+
+ATLAS is a Rust-based constraint-system layer for zero-knowledge circuits. Its
+goal is to make circuit construction feel less like pushing anonymous field
+elements through a builder and more like working with typed program state:
+witnesses, public inputs, constraints, gadgets, and proof-system adapters each
+have explicit ownership and validation boundaries.
+
+The project is aimed at the class of bugs that usually escape ordinary unit
+tests in ZK systems:
+
+- unconstrained witnesses that can be assigned arbitrary values;
+- equality constraints that are implied in the host code but absent in the
+  circuit;
+- range and bit-decomposition mistakes;
+- gadget APIs that accidentally expose low-level field operations as safe
+  high-level constraints.
+
+<Callout type="note">
+  ATLAS is not a replacement for a proving backend. It sits above concrete
+  backends and focuses on the intermediate representation, constraint hygiene,
+  and verification workflow.
+</Callout>
+
+## Design Goals
+
+The core design constraint is simple: a circuit author should be able to state
+what must be true, inspect what was actually constrained, and connect that
+artifact to a backend without losing semantic structure.
+
+ATLAS therefore keeps three representations in sync:
+
+1. a typed Rust API used by gadget authors;
+2. a normalized algebraic intermediate representation;
+3. backend-specific emitters for proving-system integrations.
+
+That separation makes the codebase slower to write but much easier to audit.
+When a gadget proves a bit decomposition, for example, the typed API tracks the
+booleanity requirements while the IR records the exact polynomial constraints
+that enforce them.
+
+## Constraint Model
+
+ATLAS models constraints as low-degree polynomial identities over a field:
+
+```text
+q_l * a + q_r * b + q_m * a * b + q_o * c + q_c = 0
+```
+
+The familiar shape maps cleanly onto R1CS-style systems and Plonkish
+arithmetization. Higher-level gadgets lower into this model through explicit
+builder phases:
+
+- allocation: create witnesses and public inputs;
+- assertion: attach algebraic facts to allocated values;
+- normalization: fold constants, canonicalize terms, and remove duplicates;
+- validation: check that every exported value is constrained as expected;
+- emission: produce backend-specific constraint data.
+
+<Benchmark caption="ATLAS layers and the questions each layer answers">
+
+| Layer | Primary question | Example output |
+| --- | --- | --- |
+| Typed API | Is this operation safe to expose? | `Boolean`, `RangeChecked<N>` |
+| IR | What polynomial facts were emitted? | normalized terms |
+| Validator | Which witnesses are still weak? | audit diagnostics |
+| Backend adapter | Can this system be proven? | R1CS or Plonkish rows |
+
+</Benchmark>
+
+## Gadget Boundary
+
+Most circuit bugs enter through reusable gadgets. ATLAS treats gadget APIs as
+security boundaries: a gadget can expose a high-level value only after the
+constraints that justify that type have been inserted.
+
+```rust
+let x = builder.witness(private_value);
+let bits = x.decompose_bits::<256>(&mut builder)?;
+
+builder.assert_boolean_slice(&bits);
+builder.assert_recomposition(x, &bits);
+```
+
+The important part is not the syntax. It is the invariant: the caller receives
+typed bits only after booleanity and recomposition constraints have been
+registered. This makes accidental misuse visible at the Rust type level and in
+the IR validator.
+
+## Verification Workflow
+
+ATLAS is built around a short feedback loop for circuit authors:
+
+1. write the gadget with typed inputs and outputs;
+2. run witness tests against normal and adversarial assignments;
+3. inspect emitted constraints through the normalized IR;
+4. run static checks for unconstrained values and suspicious degrees;
+5. emit to a backend only after validation passes.
+
+The validation pass is intentionally conservative. It should flag a few cases
+that require human review rather than silently accepting a circuit that happens
+to prove on happy-path witnesses.
+
+<Proof collapsed>
+For a field element `x`, booleanity is enforced with
+`x * (x - 1) = 0`. Because fields have no zero divisors, either `x = 0` or
+`x - 1 = 0`, so the only satisfying assignments are `0` and `1`.
+</Proof>
+
+## Current Status
+
+ATLAS is active research and implementation work. The production goal is a
+small, inspectable core rather than a broad framework: fewer gadgets, stronger
+invariants, and better diagnostics for the constraints that actually matter in
+security reviews.
+
+Near-term work:
+
+- backend adapters for common R1CS and Plonkish representations;
+- richer diagnostics for witness reachability and missing equality links;
+- fixtures for common hash, signature, and Merkle-membership gadgets;
+- machine-checkable notes for the algebraic assumptions used by each gadget.
