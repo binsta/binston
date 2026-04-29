@@ -106,6 +106,7 @@ export function getAllAudits(): Audit[] {
 }
 
 export function getAudit(slug: string): Audit | null {
+  const base = path.join(contentDir, "audits", slug);
   const tryPaths = [`${base}.mdx`, `${base}.md`];
   const filePath = tryPaths.find(fs.existsSync);
   if (!filePath) return null;
