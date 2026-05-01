@@ -1,6 +1,6 @@
 ---
 title: "Incomplete GG20 Session Binding in tss-lib v2"
-date: "2026-04-25"
+date: "2026-03-12"
 protocol: "BNB tss-lib"
 platform: "bnb"
 severity: "high"
@@ -39,9 +39,9 @@ round.temp.ssidNonce = new(big.Int).SetUint64(0)
 
 Affected areas:
 
-- `ecdsa/signing/round_1.go`
-- `eddsa/signing/round_1.go`
-- `ecdsa/resharing/round_1_old_step_1.go`
+- [`ecdsa/signing/round_1.go`](https://github.com/bnb-chain/tss-lib/blob/c23246e7c4dbbbb14a5d3528fe4fb6d4f3fe5f21/ecdsa/signing/round_1.go#L47)
+- [`eddsa/signing/round_1.go`](https://github.com/bnb-chain/tss-lib/blob/c23246e7c4dbbbb14a5d3528fe4fb6d4f3fe5f21/eddsa/signing/round_1.go#L35)
+- [`ecdsa/resharing/round_1_old_step_1.go`](https://github.com/bnb-chain/tss-lib/blob/c23246e7c4dbbbb14a5d3528fe4fb6d4f3fe5f21/ecdsa/resharing/round_1_old_step_1.go#L43)
 
 The sessionless challenge is in `crypto/mta/range_proof.go`:
 
@@ -173,3 +173,6 @@ The fix should include tests that prove:
 Session binding is only effective when every proof in the protocol uses the
 same session domain. One unbound Fiat-Shamir challenge is enough to reopen the
 cross-session replay class that GG20's session model is designed to close.
+
+## patch 
+Acknowledge by team and patch has been done by commit [pr](https://github.com/bnb-chain/tss-lib/commit/fc389792491590792072a7a6f0e1edbf61212f80)
